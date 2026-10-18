@@ -35,6 +35,7 @@ for batch_size in BATCH_SIZES:
         size=(batch_size, PROMPT_TOKENS),
         device="cuda",
     )
+    attention_mask = torch.ones_like(input_ids)
 
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
@@ -43,6 +44,7 @@ for batch_size in BATCH_SIZES:
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids=input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=NEW_TOKENS,
             do_sample=False,
             use_cache=True,
@@ -64,6 +66,6 @@ for batch_size in BATCH_SIZES:
         f"{peak_above_model / GiB:13.3f} GiB"
     )
 
-    del input_ids, output_ids
+    del input_ids, attention_mask, output_ids
     gc.collect()
     torch.cuda.empty_cache()
