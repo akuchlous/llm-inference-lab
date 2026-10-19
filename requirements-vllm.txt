@@ -1,0 +1,4 @@
+# Install in a fresh virtual environment for Lab 05.
+# Recommended install path in README uses uv --torch-backend=auto.
+vllm==0.32.0
+aiohttp>=3.10
