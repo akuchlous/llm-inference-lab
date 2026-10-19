@@ -85,6 +85,25 @@ TTFT is approximately the sum of queue/scheduler delay, prompt tokenization, pre
 
 The saturation point is not a universal property of vLLM. It depends on the complete workload and hardware combination, including model size, precision, prompt length, output length, GPU compute, GPU memory bandwidth, VRAM capacity, and serving configuration.
 
+## GPU saturation observation
+
+During the high-concurrency runs, a parallel `nvidia-smi` sample showed representative values near:
+
+```text
+GPU utilization       ~100%
+memory utilization    ~96–100%
+VRAM used             ~42.3 / 46.1 GiB
+power draw             ~300 W
+```
+
+Here, `nvidia-smi` memory utilization refers to memory-controller activity, not simply VRAM occupancy. VRAM occupancy itself was already around 92%.
+
+The clean conclusion is that the A40 had entered a fully occupied region: additional requests were competing for an already busy GPU, which is consistent with the flattening throughput curve and worsening TTFT/latency.
+
+These coarse metrics are **not enough to prove whether the workload is specifically compute-bound or memory-bandwidth-bound**. Distinguishing those requires finer profiling or controlled workload perturbations. The important serving-level observation is that the device was saturated and further concurrency delivered diminishing returns.
+
+The relatively stable ~42.3 GiB VRAM footprint is also consistent with vLLM reserving a large KV-cache/memory pool and scheduling active requests within that budget instead of allocating memory monotonically until OOM.
+
 ## Engineering takeaway
 
 Production inference optimization is a multi-objective problem:
