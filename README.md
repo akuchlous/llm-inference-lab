@@ -2,17 +2,17 @@
 
 A hands-on learning repository for understanding and optimizing LLM inference from the GPU up.
 
-The goal is not just to learn how to call an LLM API. It is to build enough systems understanding to design, operate, secure, and optimize private enterprise LLM infrastructure.
+The goal is not just to learn how to call an LLM API. It is to build enough systems understanding to design, operate, secure, benchmark, and optimize private enterprise LLM infrastructure.
 
 ## Learning path
 
 ### Inference fundamentals
 
-**tokens → attention → KV cache → GPU memory → batching → throughput → latency → inference cost**
+**tokens → attention → KV cache → GPU memory → batching → prefill/decode → throughput → latency → inference cost**
 
 ### One level higher
 
-**model selection → routing → caching → context management → RAG → observability → evaluation → reliability → economics**
+**serving engines → continuous batching → model selection → routing → caching → context management → RAG → observability → evaluation → reliability → economics**
 
 ## Long-term goal
 
@@ -23,30 +23,120 @@ Be able to take an enterprise workload, security requirements, model choices, ha
 - benchmark the workload,
 - determine whether it is memory-, compute-, or communication-bound,
 - tune serving and GPU configuration,
-- and explain the quality, latency, throughput, reliability, and cost tradeoffs.
+- and explain quality, latency, throughput, reliability, and cost tradeoffs.
 
-## Labs
+## Setup
 
-| Lesson | Topic | Status |
-|---|---|---|
-| [01](01_gpu_memory/README.md) | GPU memory fundamentals | Complete |
-| 02 | KV cache | Next |
-| 03 | Prefill vs. decode | Planned |
-| 04 | Batching and concurrency | Planned |
-| 05 | vLLM serving | Planned |
-| 06 | Quantization | Planned |
+### Labs 01–04
 
-Each lesson gets its own `README.md` containing the question, mental model, experiment, measurements, interpretation, and engineering takeaway.
+Use a CUDA-capable PyTorch environment, then install the common dependencies:
 
-## Environment used for Lab 01
+```bash
+pip install -r requirements.txt
+```
 
-- NVIDIA A40
-- Driver 580.159.03
-- CUDA driver capability 13.0
-- Python 3.12.3
-- PyTorch 2.8.0+cu128
-- Mistral 7B / Mistral 7B Instruct
+PyTorch is deliberately not pinned in `requirements.txt` because GPU images differ in CUDA/driver compatibility. On Runpod, start from a PyTorch/CUDA image that already supports the GPU.
+
+### Lab 05 — vLLM
+
+vLLM should be installed in a separate environment because its wheels are coupled to particular PyTorch/CUDA builds:
+
+```bash
+pip install --upgrade uv
+uv venv --python 3.12 --seed .venv-vllm
+source .venv-vllm/bin/activate
+uv pip install -r requirements-vllm.txt --torch-backend=auto
+```
+
+## Completed labs
+
+| Lesson | Topic | Key result | Status |
+|---|---|---|---|
+| [01](01_gpu_memory/README.md) | GPU memory fundamentals | Mistral-7B BF16 weights use ~13.5 GiB; peak memory grows nearly linearly with context | Complete |
+| [02](02_kv_cache/README.md) | KV cache | Exact Mistral KV cache = **128 KiB/token** | Complete |
+| [03](03_batching/README.md) | Batching + context | Batch 8 at 1K context = **140.56 tok/s**; 4K context = **58.53 tok/s** | Complete |
+| [04](04_prefill_decode/README.md) | Prefill vs decode | 4K prefill ≈ **686 ms**; decode ≈ **33.5 ms/token** | Complete |
+| [05](05_vllm/README.md) | vLLM concurrency | Concurrency 8 reached **270.95 tok/s** vs 37.19 tok/s at concurrency 1 | In progress |
+| 06 | Quantization / memory efficiency | — | Planned |
+
+Each lesson README is the canonical record containing the question, mental model, experiment, measured output, interpretation, and engineering takeaway. Some folders also retain `RESULTS.md` as a compact raw-results record.
+
+## Hardware used so far
+
+Experiments have been run on NVIDIA A40 GPUs (~46,068 MiB reported by `nvidia-smi`). Driver/CUDA versions vary across disposable Runpod instances, so exact software versions are recorded in lesson notes when relevant.
+
+Primary model:
+
+- `mistralai/Mistral-7B-Instruct-v0.3`
+- BF16 for the Hugging Face experiments
+
+## Current measured findings
+
+### GPU memory
+
+- Mistral-7B BF16 model allocation: ~**13.5 GiB**
+- 1 billion FP16/BF16 values: ~**1.86 GiB**
+- PyTorch `allocated` and `reserved` memory are different; deleting tensors does not necessarily return cached blocks to CUDA immediately.
+
+### KV cache
+
+For Mistral-7B BF16 with 32 layers, 8 KV heads, and head dimension 128:
+
+```text
+2 (K+V) × 32 × 8 × 128 × 2 bytes = 128 KiB/token
+```
+
+At 8K context, exact KV tensors occupy ~**1 GiB** per sequence.
+
+### Batching
+
+At 1K context:
+
+```text
+batch 1 → 25.94 tok/s
+batch 2 → 53.39 tok/s
+batch 4 → 91.18 tok/s
+batch 8 → 140.56 tok/s
+```
+
+At batch 8, increasing context from 1K to 4K increased peak-above-model memory from **1.918 GiB to 7.650 GiB** and reduced throughput from **140.56 to 58.53 tok/s**.
+
+### Prefill vs decode
+
+At batch 1:
+
+```text
+128-token prompt  → prefill 65.85 ms, decode 32.09 ms/token
+4096-token prompt → prefill 686.22 ms, decode 33.51 ms/token
+```
+
+Long prompts primarily increase TTFT through prefill; per-token decode latency rises much more modestly.
+
+### vLLM
+
+With 64 output tokens/request:
+
+```text
+concurrency 1 → 37.19 tok/s
+concurrency 2 → 69.41 tok/s
+concurrency 4 → 138.19 tok/s
+concurrency 8 → 270.95 tok/s
+```
+
+This demonstrates strong aggregate-throughput scaling under concurrent serving. The next step is to measure TTFT and per-request latency under concurrency rather than throughput alone.
 
 ## Workflow
 
-GitHub is the source of truth. Code can be edited locally, pulled onto a disposable GPU instance such as Runpod, executed there, and the resulting measurements committed back to this repository.
+GitHub is the source of truth. Runpod instances are disposable:
+
+```text
+edit / commit in GitHub
+        ↓
+git pull on GPU pod
+        ↓
+run experiment
+        ↓
+record measured output in lesson README
+```
+
+The repository is intended to remain reproducible and useful as a technical portfolio, not just as scratch code.
