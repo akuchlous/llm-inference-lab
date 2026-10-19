@@ -5,7 +5,7 @@ import aiohttp
 
 URL = "http://localhost:8000/v1/chat/completions"
 MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
-CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64]
+CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 MAX_TOKENS = 64
 
 async def one_request(session, idx):
@@ -49,8 +49,9 @@ async def one_request(session, idx):
     return ttft, total, completion_tokens
 
 async def run_level(concurrency):
-    timeout = aiohttp.ClientTimeout(total=180)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    timeout = aiohttp.ClientTimeout(total=300)
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         start = time.perf_counter()
         tasks = [one_request(session, i) for i in range(concurrency)]
         results = await asyncio.gather(*tasks)
