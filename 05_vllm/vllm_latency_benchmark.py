@@ -5,7 +5,7 @@ import aiohttp
 
 URL = "http://localhost:8000/v1/chat/completions"
 MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
-CONCURRENCY_LEVELS = [1, 2, 4, 8]
+CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64]
 MAX_TOKENS = 64
 
 async def one_request(session, idx):
@@ -49,26 +49,33 @@ async def one_request(session, idx):
     return ttft, total, completion_tokens
 
 async def run_level(concurrency):
-    timeout = aiohttp.ClientTimeout(total=120)
+    timeout = aiohttp.ClientTimeout(total=180)
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        start = time.perf_counter()
         tasks = [one_request(session, i) for i in range(concurrency)]
         results = await asyncio.gather(*tasks)
+        wall_time = time.perf_counter() - start
 
     ttfts = [r[0] for r in results if r[0] is not None]
     totals = [r[1] for r in results]
+    output_tokens = sum(r[2] for r in results)
 
     avg_ttft_ms = (sum(ttfts) / len(ttfts)) * 1000
     avg_total_s = sum(totals) / len(totals)
     p95_total_s = sorted(totals)[max(0, int(len(totals) * 0.95) - 1)]
+    throughput = output_tokens / wall_time if wall_time > 0 else 0.0
 
-    return avg_ttft_ms, avg_total_s, p95_total_s
+    return avg_ttft_ms, avg_total_s, p95_total_s, throughput
 
 async def main():
-    print(f"{'Concurrency':>11} | {'Avg TTFT ms':>11} | {'Avg total s':>11} | {'P95 total s':>11}")
-    print("-" * 58)
+    print(f"{'Concurrency':>11} | {'Avg TTFT ms':>11} | {'Avg total s':>11} | {'P95 total s':>11} | {'Throughput tok/s':>16}")
+    print("-" * 79)
     for c in CONCURRENCY_LEVELS:
-        avg_ttft_ms, avg_total_s, p95_total_s = await run_level(c)
-        print(f"{c:11d} | {avg_ttft_ms:11.2f} | {avg_total_s:11.2f} | {p95_total_s:11.2f}")
+        avg_ttft_ms, avg_total_s, p95_total_s, throughput = await run_level(c)
+        print(
+            f"{c:11d} | {avg_ttft_ms:11.2f} | {avg_total_s:11.2f} | "
+            f"{p95_total_s:11.2f} | {throughput:16.2f}"
+        )
 
 if __name__ == "__main__":
     asyncio.run(main())
