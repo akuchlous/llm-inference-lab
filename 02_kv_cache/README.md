@@ -42,43 +42,75 @@ The leading `2` represents Key + Value.
 For this model:
 
 ```text
-2 × 32 × 8 × 128 × 2
+2 × 32 × 8 × 128 × 2 = 131,072 bytes = 128 KiB/token
 ```
 
-The next step is to calculate this value by hand, convert it to KiB/token, and then predict KV-cache memory for:
+Theoretical cache sizes:
 
-- 1,024 tokens
-- 8,192 tokens
-- 32,768 tokens
+- 1K tokens → 128 MiB
+- 2K tokens → 256 MiB
+- 4K tokens → 512 MiB
+- 8K tokens → 1 GiB
+- 32K tokens → 4 GiB
 
-## Why compare theory with Lesson 01?
+## Experiment 1 — Exact KV tensors
 
-Lesson 01 measured approximately 1.918 GiB of **peak memory above model weights** for an 8,192-token prompt plus generation.
+Run:
 
-That measured value is not pure KV cache. It also includes temporary inference tensors, workspaces/activations, allocator effects, and runtime overhead.
+```bash
+python 02_kv_cache/measure_kv_cache.py
+```
 
-By calculating theoretical KV memory first, we can separate:
+Hardware: NVIDIA A40  
+Model memory: **13.500 GiB**  
+Precision: BF16
+
+| Tokens | Exact KV | KV/token | Allocator delta | Peak above model |
+|---:|---:|---:|---:|---:|
+| 128 | 16.0 MiB | 128.0 KiB | 24.1 MiB | 40.2 MiB |
+| 512 | 64.0 MiB | 128.0 KiB | 72.1 MiB | 130.4 MiB |
+| 1,024 | 128.0 MiB | 128.0 KiB | 136.1 MiB | 252.6 MiB |
+| 2,048 | 256.0 MiB | 128.0 KiB | 264.1 MiB | 497.2 MiB |
+| 4,096 | 512.0 MiB | 128.0 KiB | 520.2 MiB | 986.2 MiB |
+| 8,192 | 1,024.0 MiB | 128.0 KiB | 1,032.2 MiB | 1,964.2 MiB |
+
+The exact K/V tensors match theory exactly at **128 KiB/token**.
+
+At 8K context, exact KV is **1 GiB**, while peak-above-model memory is about **1.918 GiB**. The difference is temporary forward-pass memory, workspaces/activations, and allocator/runtime effects rather than persistent KV cache.
+
+## Experiment 2 — KV lifecycle
+
+`kv_lifecycle.py` showed:
 
 ```text
-measured peak memory
-        ↓
-KV cache
-+ temporary inference memory
-+ allocator/runtime overhead
+1. Model loaded          allocated=13.500 GiB  reserved=13.627 GiB
+2. KV cache alive        allocated=14.508 GiB  reserved=15.033 GiB
+3. KV cache deleted      allocated=13.508 GiB  reserved=13.752 GiB
 ```
 
-## Questions this lesson should answer
+The script explicitly calls `torch.cuda.empty_cache()` after deleting the KV cache, so unused reserved blocks are returned to CUDA.
 
-- How many bytes of KV cache does one token require?
-- Why does the number of transformer layers multiply KV memory?
-- Why does GQA reduce KV memory?
-- How closely does theoretical KV memory explain the A40 experiment?
-- What happens to KV memory when context length or concurrency increases?
+## Experiment 3 — PyTorch caching allocator
 
-## Engineering connection
+`allocator_cache_behavior.py` separated deletion from `empty_cache()`:
 
-Understanding this calculation is foundational for later topics:
+```text
+1. Model loaded               allocated=13.500 GiB  reserved=13.627 GiB
+2. KV cache alive             allocated=14.508 GiB  reserved=15.971 GiB
+3. KV deleted, no empty_cache allocated=13.508 GiB  reserved=15.971 GiB
+4. After empty_cache          allocated=13.508 GiB  reserved=13.752 GiB
+```
 
-**KV cache → concurrency → batching → throughput → GPU capacity → inference cost**
+This proves the distinction between:
 
-For enterprise serving, model weights are often shared across requests while each active request needs its own KV state. That means KV-cache capacity can become a practical limit on how many long-context requests a GPU can serve simultaneously.
+- **allocated** — live tensor memory,
+- **reserved** — GPU memory owned by PyTorch's caching allocator,
+- **returned to CUDA** — unused blocks released by `empty_cache()`.
+
+## Engineering takeaway
+
+KV-cache capacity can be predicted directly from architecture and precision, but GPU capacity planning also needs headroom for transient inference memory.
+
+Model weights are shared across requests, while each active sequence needs its own KV state. Long context and high concurrency therefore multiply memory pressure quickly.
+
+`RESULTS.md` is retained as the raw experiment record; this README is the canonical lesson summary.
