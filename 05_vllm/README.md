@@ -42,7 +42,7 @@ python 05_vllm/vllm_concurrency_benchmark.py
 python 05_vllm/vllm_latency_benchmark.py
 ```
 
-## Throughput experiment
+## Small-concurrency throughput experiment
 
 | Concurrency | Elapsed | Output tokens | Aggregate throughput |
 |---:|---:|---:|---:|
@@ -57,24 +57,33 @@ Wall-clock time changed only modestly from **1.72 s to 1.89 s** while the output
 
 This should not yet be read as a strict vLLM-vs-Hugging-Face speed comparison because the earlier experiments differ in prompt construction, execution path, and server overhead. The clean conclusion is that **vLLM scales aggregate throughput strongly with concurrent requests in this workload**.
 
-## Latency experiment
+## Saturation experiment
 
-| Concurrency | Avg TTFT | Avg total latency | P95 total latency |
-|---:|---:|---:|---:|
-| 1 | 93.63 ms | 1.77 s | 1.77 s |
-| 2 | 52.21 ms | 1.83 s | 1.82 s |
-| 4 | 72.90 ms | 1.86 s | 1.86 s |
-| 8 | 92.32 ms | 1.89 s | 1.90 s |
+The latency benchmark was then extended to concurrency levels from 1 through 256.
+
+| Concurrency | Avg TTFT | Avg total latency | P95 total latency | Throughput |
+|---:|---:|---:|---:|---:|
+| 1 | 43.84 ms | 1.73 s | 1.73 s | 37.10 tok/s |
+| 2 | 72.34 ms | 1.84 s | 1.83 s | 68.92 tok/s |
+| 4 | 70.76 ms | 1.86 s | 1.86 s | 137.38 tok/s |
+| 8 | 91.96 ms | 1.89 s | 1.90 s | 269.81 tok/s |
+| 16 | 120.64 ms | 2.00 s | 2.01 s | 508.89 tok/s |
+| 32 | 179.24 ms | 2.03 s | 2.05 s | 998.07 tok/s |
+| 64 | 282.56 ms | 2.28 s | 2.32 s | 1762.97 tok/s |
+| 128 | 500.08 ms | 2.73 s | 2.77 s | 2928.97 tok/s |
+| 256 | 809.75 ms | 4.22 s | 4.29 s | 3816.89 tok/s |
 
 ### Interpretation
 
-Over this small concurrency range, individual-request completion latency barely changed: average total latency moved from **1.77 s at concurrency 1** to **1.89 s at concurrency 8**, while aggregate throughput increased more than 7×.
+The A40 shows excellent batching efficiency through moderate concurrency. From concurrency 1 to 64, throughput rises from about **37 tok/s to 1,763 tok/s** while average completion latency only moves from **1.73 s to 2.28 s**.
 
-TTFT stayed in roughly the **50–95 ms** range and did not increase monotonically. At these small absolute times, warm kernels, scheduler timing, request arrival alignment, and measurement noise can easily move TTFT by tens of milliseconds. The main result is therefore not that concurrency 2 is intrinsically faster than concurrency 1; it is that **TTFT remained low and broadly stable while throughput scaled strongly**.
+At higher concurrency, the tradeoff becomes much clearer. From **128 to 256 concurrent requests**, throughput rises from **2,929 to 3,817 tok/s** — only about a **30% gain** — while average TTFT rises from **500 ms to 810 ms** (about **62%**) and average total latency rises from **2.73 s to 4.22 s** (about **55%**).
 
-This is a favorable operating region: the GPU has enough unused parallel capacity that adding concurrent requests increases utilization much more than it hurts user-visible latency.
+That region is the first clear saturation knee for this specific workload. The GPU is still producing more total tokens at concurrency 256, but each extra unit of concurrency buys substantially less throughput and costs substantially more user-visible latency.
 
-At higher concurrency, the expectation is that the system will eventually reach saturation. At that point queueing grows, TTFT and tail latency rise, and throughput gains begin to flatten. Finding that saturation point is a core production capacity-planning exercise.
+TTFT is approximately the sum of queue/scheduler delay, prompt tokenization, prefill, first-token decode, and streaming overhead. In this local benchmark, tokenization and network overhead are small, so the increase in TTFT at high concurrency is primarily a sign that requests spend longer waiting for GPU scheduling and prefill/first-token work.
+
+The saturation point is not a universal property of vLLM. It depends on the complete workload and hardware combination, including model size, precision, prompt length, output length, GPU compute, GPU memory bandwidth, VRAM capacity, and serving configuration.
 
 ## Engineering takeaway
 
@@ -87,5 +96,7 @@ Production inference optimization is a multi-objective problem:
 - **KV-cache / VRAM capacity** — how many active sequences can fit.
 
 The goal is not maximum throughput at any cost. It is to find the highest sustainable concurrency that still satisfies latency and reliability SLAs.
+
+For this A40 + Mistral-7B BF16 + 64-token-output workload, the measurements suggest that **128 concurrent requests are still efficient, while moving to 256 enters a noticeably less efficient region**. The exact production operating point would depend on the required TTFT and latency SLA.
 
 `RESULTS.md` is retained as the raw experiment record; this README is the canonical lesson summary.
