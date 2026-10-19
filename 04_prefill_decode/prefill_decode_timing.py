@@ -42,33 +42,34 @@ for context_len in CONTEXT_LENGTHS:
     )
     attention_mask = torch.ones_like(input_ids)
 
-    # PREFILL: process the whole prompt and build KV cache.
-    torch.cuda.synchronize()
-    start = time.perf_counter()
     with torch.inference_mode():
+        # PREFILL: process the whole prompt and build KV cache.
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+
         out = model.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             use_cache=True,
             return_dict=True,
         )
-    torch.cuda.synchronize()
-    prefill_s = time.perf_counter() - start
 
-    past_key_values = out.past_key_values
-    last_hidden = out.last_hidden_state[:, -1:, :]
-    logits = model.lm_head(last_hidden)
-    next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-
-    del out, last_hidden, logits
-
-    # DECODE: feed one new token at a time using the existing KV cache.
-    decode_times = []
-    for _ in range(DECODE_STEPS):
         torch.cuda.synchronize()
-        step_start = time.perf_counter()
+        prefill_s = time.perf_counter() - start
 
-        with torch.inference_mode():
+        past_key_values = out.past_key_values
+        last_hidden = out.last_hidden_state[:, -1:, :]
+        logits = model.lm_head(last_hidden)
+        next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+
+        del out, last_hidden, logits
+
+        # DECODE: feed one new token at a time using the existing KV cache.
+        decode_times = []
+        for _ in range(DECODE_STEPS):
+            torch.cuda.synchronize()
+            step_start = time.perf_counter()
+
             out = model.model(
                 input_ids=next_token,
                 past_key_values=past_key_values,
@@ -80,10 +81,10 @@ for context_len in CONTEXT_LENGTHS:
             logits = model.lm_head(last_hidden)
             next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
 
-        torch.cuda.synchronize()
-        decode_times.append(time.perf_counter() - step_start)
+            torch.cuda.synchronize()
+            decode_times.append(time.perf_counter() - step_start)
 
-        del out, last_hidden, logits
+            del out, last_hidden, logits
 
     prefill_ms = prefill_s * 1000
     prefill_tps = context_len / prefill_s
