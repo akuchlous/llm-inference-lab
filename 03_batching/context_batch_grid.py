@@ -47,6 +47,7 @@ for context_len in CONTEXT_LENGTHS:
                 output_ids = model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    min_new_tokens=NEW_TOKENS,
                     max_new_tokens=NEW_TOKENS,
                     do_sample=False,
                     use_cache=True,
