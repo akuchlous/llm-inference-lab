@@ -63,6 +63,12 @@ Run INT4 NF4 weights:
 python 06_quantization/int4_nf4_baseline.py
 ```
 
+Run the BF16 vs INT4 quality comparison:
+
+```bash
+python 06_quantization/quality_compare.py
+```
+
 ## Experimental rule
 
 When comparing quantization formats, keep these fixed unless the experiment explicitly changes one:
@@ -170,6 +176,29 @@ precision=INT4_NF4 params=3758362624 model_alloc_gib=3.858 prompt_tokens=1024 ou
 
 The `3,758,362,624` value above is a count of the packed tensors exposed by the quantized implementation, not evidence that the logical model became a 3.8B model. It is still the Mistral-7B model; the weights are represented in a packed 4-bit form.
 
+## Quality comparison: BF16 vs INT4 NF4
+
+Both variants were run with deterministic greedy decoding on the same four prompts covering KV cache, VRAM arithmetic, model-state concepts, and grouped-query attention.
+
+### Observed result
+
+There was **no clear evidence that INT4 was materially worse than BF16 on this small sample**.
+
+- **KV-cache prompt:** both BF16 and INT4 incorrectly interpreted “KV cache” initially as a generic key-value application cache rather than transformer key/value state. This is a model/prompting failure shared by both precisions, not evidence of quantization damage.
+- **VRAM arithmetic:** INT4 was actually more direct. It correctly computed `46 - 13.5 = 32.5 GiB` available for request KV cache before the output truncation. The BF16 answer took an unnecessary GiB-to-MB detour and had not reached the final concurrency number within the captured output.
+- **Weights / activations / KV cache:** both answers were broadly reasonable but incomplete because the generation limit cut them off before finishing the KV-cache explanation.
+- **Grouped-query attention:** both correctly recognized that fewer KV heads reduce memory by sharing K/V projections across query heads. Both outputs were truncated before explicitly stating the full `32 / 8 = 4×` KV-head memory reduction.
+
+### Important limitation
+
+This is **not a rigorous quality benchmark**. Four prompts are far too few to establish that INT4 has no quality loss. Also, several responses were truncated by the generation-token limit, which makes completeness difficult to compare.
+
+The useful systems conclusion from this experiment is narrower:
+
+> On these four deterministic prompts, aggressive INT4 NF4 quantization produced no obvious qualitative collapse relative to BF16. The dominant errors were shared by both versions.
+
+A real quality study would use a larger task set with objective scoring (for example math/reasoning accuracy, code tests, factual QA, or perplexity), rather than judging a handful of free-form responses.
+
 ## Interpretation
 
 The memory reduction is dramatic:
@@ -186,8 +215,19 @@ This demonstrates why precision alone does not predict speed. The INT4 kernel pa
 
 `CUDA reserved after load` is larger than live allocation because PyTorch's caching allocator has claimed reusable memory blocks from CUDA. For INT4, about **3.858 GiB** was actively allocated to live tensors after load while **6.734 GiB** was held by the allocator. Reserved memory is allocator capacity, not all live model data.
 
-## Next experiment
+The first quality check did not show an obvious INT4 degradation, but it also highlighted why quality needs a structured benchmark rather than a few subjective prompts.
 
-Memory and speed are now characterized. The next question is **quality**: does the more aggressive INT4 representation noticeably change the model's answers compared with BF16 on the same prompts?
+## Lesson takeaway
+
+Quantization changes three different dimensions that must be measured independently:
+
+```text
+precision ↓
+   ├── model memory ↓ dramatically
+   ├── speed → depends on kernels/hardware/workload
+   └── quality → must be benchmarked; cannot be inferred from bit width alone
+```
+
+For this A40 experiment, INT4 NF4 was the strongest capacity/performance tradeoff of the three tested representations.
 
 GitHub remains the canonical record for the lab.
