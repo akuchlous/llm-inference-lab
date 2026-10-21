@@ -48,7 +48,7 @@ def main() -> None:
         args.model,
         quantization_config=quant_config,
         device_map="cuda",
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
     )
     model.eval()
     cuda_sync()
