@@ -101,18 +101,53 @@ Only precision/quantization should change.
 
 | Metric | BF16 | INT8 | INT4 |
 |---|---:|---:|---:|
-| Parameter memory | measure | — | — |
-| CUDA memory after load | measure | — | — |
-| Peak GPU memory | measure | — | — |
-| Output tok/s | measure | — | — |
+| Parameter memory | 13.500 GiB | — | — |
+| CUDA memory after load | 13.500 GiB | — | — |
+| Peak GPU memory | 13.747 GiB | — | — |
+| Output tok/s | 33.59 | — | — |
 | TTFT / TPOT | later serving lab | — | — |
 | Maximum practical concurrency | later serving lab | — | — |
 | Quality | baseline | compare | compare |
 
+## Measured BF16 baseline
+
+Environment: same Mistral-7B model family used in earlier labs, BF16, batch 1.
+
+```text
+=== Model load ===
+Parameters: 7,248,023,552
+Parameter bytes: 13.500 GiB
+CUDA allocated after load: 13.500 GiB
+CUDA reserved after load: 13.504 GiB
+Load time: 3.93 s
+
+=== Workload ===
+Prompt tokens: 1024
+Requested output tokens: 64
+
+=== Measured generation ===
+Generated tokens: 64
+Elapsed: 1.905 s
+Output throughput: 33.59 tok/s
+Peak CUDA allocated: 13.747 GiB
+Peak above loaded model: 252.7 MiB
+Allocated at measured-run start: 13.508 GiB
+```
+
+Compact record:
+
+```text
+precision=BF16 params=7248023552 param_gib=13.500 model_alloc_gib=13.500 prompt_tokens=1024 output_tokens=64 elapsed_s=1.905 output_tok_s=33.59 peak_gib=13.747
+```
+
+### Interpretation
+
+The raw parameter calculation and CUDA allocation agree almost exactly: about **13.5 GiB** is occupied by the BF16 model weights. The 1K-context, 64-token generation peaked at **13.747 GiB**, or about **252.7 MiB above the loaded model**. Throughput for this batch-1 workload was **33.59 output tokens/s**.
+
+These values are now the control group. The next experiment should change only the model-weight representation and repeat the same 1024-token prompt / 64-token output workload.
+
 ## Next experiment
 
-After the BF16 numbers are recorded, add one quantized representation and run the exact same workload. Do not change multiple variables at once.
+Run an INT8-weight version of the same model/workload and compare model allocation, peak memory, and output throughput against this BF16 baseline.
 
-## Results
-
-Run the baseline on the GPU and record the measured output here. GitHub remains the canonical record for the lab.
+GitHub remains the canonical record for the lab.
