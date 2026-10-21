@@ -24,7 +24,7 @@ INT8  ~7 GB
 INT4 ~3.5 GB
 ```
 
-Quantization does **not** reduce the parameter count. It stores those parameters more compactly, usually with scale/metadata and specialized kernels.
+Quantization does **not** reduce the model's logical parameter count. It stores those parameters more compactly, usually with scale/metadata and specialized kernels. Packed quantized tensors can make a naive `sum(p.numel())` report fewer stored tensor elements, so that value is not directly comparable to the original logical parameter count.
 
 Lower precision guarantees lower weight-memory usage, but does not guarantee a proportional speedup. Runtime performance depends on the GPU architecture, kernel implementation, batch size, and whether the workload is limited by compute, memory bandwidth, or capacity.
 
@@ -38,7 +38,7 @@ git pull
 ./run.sh
 ```
 
-The default workload for both baselines is:
+The default workload for all three baselines is:
 
 - model: `mistralai/Mistral-7B-Instruct-v0.3`
 - prompt: 1024 tokens
@@ -55,6 +55,12 @@ Run INT8 weights:
 
 ```bash
 python 06_quantization/int8_baseline.py
+```
+
+Run INT4 NF4 weights:
+
+```bash
+python 06_quantization/int4_nf4_baseline.py
 ```
 
 ## Experimental rule
@@ -74,14 +80,15 @@ Only precision/quantization should change.
 
 ## Measured comparison
 
-| Metric | BF16 | INT8 weights | INT4 |
+| Metric | BF16 | INT8 weights | INT4 NF4 |
 |---|---:|---:|---:|
-| Parameters | 7,248,023,552 | 7,248,023,552 | — |
-| CUDA memory after load | 13.500 GiB | 7.006 GiB | — |
-| Peak GPU memory | 13.747 GiB | 7.692 GiB | — |
-| Peak above loaded model | 252.7 MiB | 702.9 MiB | — |
-| Elapsed for 64 output tokens | 1.905 s | 7.524 s | — |
-| Output throughput | 33.59 tok/s | 8.51 tok/s | — |
+| Logical model | Mistral-7B | Mistral-7B | Mistral-7B |
+| CUDA memory after load | 13.500 GiB | 7.006 GiB | 3.858 GiB |
+| CUDA reserved after load | 13.504 GiB | — | 6.734 GiB |
+| Peak GPU memory | 13.747 GiB | 7.692 GiB | 4.195 GiB |
+| Peak above loaded model | 252.7 MiB | 702.9 MiB | 344.7 MiB |
+| Elapsed for 64 output tokens | 1.905 s | 7.524 s | 2.304 s |
+| Output throughput | 33.59 tok/s | 8.51 tok/s | 27.77 tok/s |
 
 ## BF16 baseline
 
@@ -132,18 +139,55 @@ Compact record:
 precision=INT8 params=7248023552 model_alloc_gib=7.006 prompt_tokens=1024 output_tokens=64 elapsed_s=7.524 output_tok_s=8.51 peak_gib=7.692
 ```
 
+## INT4 NF4 baseline
+
+```text
+=== Model load ===
+Parameters: 3,758,362,624
+Model reported footprint: 3.750 GiB
+CUDA allocated after load: 3.858 GiB
+CUDA reserved after load: 6.734 GiB
+Load time: 4.40 s
+
+=== Workload ===
+Prompt tokens: 1024
+Requested output tokens: 64
+
+=== Measured generation ===
+Generated tokens: 64
+Elapsed: 2.304 s
+Output throughput: 27.77 tok/s
+Peak CUDA allocated: 4.195 GiB
+Peak above loaded model: 344.7 MiB
+Allocated at measured-run start: 3.866 GiB
+```
+
+Compact record:
+
+```text
+precision=INT4_NF4 params=3758362624 model_alloc_gib=3.858 prompt_tokens=1024 output_tokens=64 elapsed_s=2.304 output_tok_s=27.77 peak_gib=4.195
+```
+
+The `3,758,362,624` value above is a count of the packed tensors exposed by the quantized implementation, not evidence that the logical model became a 3.8B model. It is still the Mistral-7B model; the weights are represented in a packed 4-bit form.
+
 ## Interpretation
 
-The memory result is strong: INT8 reduced loaded-model CUDA allocation from **13.500 GiB to 7.006 GiB**, a reduction of about **48%**. Peak memory during generation fell from **13.747 GiB to 7.692 GiB**.
+The memory reduction is dramatic:
 
-The speed result went in the opposite direction. For this batch-1 A40 + Hugging Face + bitsandbytes workload, output throughput fell from **33.59 tok/s to 8.51 tok/s**, or roughly **4× slower**.
+```text
+BF16  13.500 GiB
+INT8   7.006 GiB
+INT4   3.858 GiB
+```
 
-This is the key systems lesson: **quantization is a representation and capacity optimization first; it is not automatically a latency or throughput optimization**. Real speed depends on whether the GPU and serving stack have efficient kernels for the chosen quantization format and workload.
+INT4 NF4 reduced live CUDA model allocation by about **71% versus BF16** while retaining **27.77 tok/s**, about **83% of the BF16 batch-1 throughput** in this experiment. In contrast, the bitsandbytes INT8 path reached only **8.51 tok/s**.
 
-The INT8 run also used more temporary memory above the loaded model (about **703 MiB** versus **253 MiB** for BF16), consistent with the fact that quantized execution still requires mixed-precision activations, temporary buffers, and quantization/dequantization work.
+This demonstrates why precision alone does not predict speed. The INT4 kernel path happened to be much more efficient than the INT8 path on this A40/workload, even though INT4 performs more aggressive compression.
+
+`CUDA reserved after load` is larger than live allocation because PyTorch's caching allocator has claimed reusable memory blocks from CUDA. For INT4, about **3.858 GiB** was actively allocated to live tensors after load while **6.734 GiB** was held by the allocator. Reserved memory is allocator capacity, not all live model data.
 
 ## Next experiment
 
-Add an INT4-weight version of the same model/workload and measure whether the additional weight-memory reduction improves capacity, and what happens to batch-1 throughput on this A40.
+Memory and speed are now characterized. The next question is **quality**: does the more aggressive INT4 representation noticeably change the model's answers compared with BF16 on the same prompts?
 
 GitHub remains the canonical record for the lab.
