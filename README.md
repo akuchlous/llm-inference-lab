@@ -27,7 +27,7 @@ Be able to take an enterprise workload, security requirements, model choices, ha
 
 ## Setup
 
-### Labs 01–04
+### Labs 01–04 and 06
 
 Use a CUDA-capable PyTorch environment, then install the common dependencies:
 
@@ -57,7 +57,7 @@ uv pip install -r requirements-vllm.txt --torch-backend=auto
 | [03](03_batching/README.md) | Batching + context | Batch 8 at 1K context = **140.56 tok/s**; 4K context = **58.53 tok/s** | Complete |
 | [04](04_prefill_decode/README.md) | Prefill vs decode | 4K prefill ≈ **686 ms**; decode ≈ **33.5 ms/token** | Complete |
 | [05](05_vllm/README.md) | vLLM concurrency and saturation | **3,817 tok/s at concurrency 256**, but with a clear latency/TTFT saturation knee after ~128 | Complete |
-| 06 | Quantization / memory efficiency | BF16 vs lower-precision memory, latency, throughput, capacity, and quality tradeoffs | Planned |
+| [06](06_quantization/README.md) | Quantization / memory efficiency | BF16 baseline first; then lower-precision memory, latency, throughput, capacity, and quality comparisons | In progress |
 | 07 | Sparse activation / Mixture of Experts | Total vs active parameters, top-k expert routing, load balance, and serving implications | Planned |
 | 08 | Multi-GPU inference | Tensor/expert parallelism, communication costs, placement, and scaling | Planned |
 | 09 | Capacity and cost optimization | Convert workload + SLA into GPU count, concurrency targets, and serving economics | Planned |
@@ -133,6 +133,8 @@ At high concurrency, representative `nvidia-smi` samples showed GPU utilization 
 ## Upcoming optimization chapters
 
 ### 06 — Quantization
+
+Lab 1 is now runnable from `06_quantization/bf16_baseline.py`. It establishes the BF16 control measurement before lower-precision variants are introduced.
 
 Compare BF16 with lower-precision representations and measure what changes in model memory, KV-cache headroom, throughput, TTFT/TPOT, serving capacity, and answer quality.
 
